@@ -1,0 +1,11 @@
+services:
+  zip-listener:
+    build: .
+    image: zip-listener:latest
+    restart: always
+    env_file:
+      - config.env
+    volumes:
+      - "D:/Files/File Downloads:/app/source"
+      - "D:/Files/Movies:/app/destination"
+      - ./logs:/app/logs
