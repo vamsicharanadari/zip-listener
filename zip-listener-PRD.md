@@ -1,90 +1,72 @@
 # Product Requirements Document (PRD)
 
 **Project Title:** Automated Folder Listener & ZIP Extractor  
-**Author:** [Your Name]  
-**Date:** [Today’s Date]  
+**Author:** Vamsi Charan Adari
+**Date:** 2025-09-20  
 **Version:** 2.0  
 
 ---
 
 ## 1. Objective  
+Create a Windows-based background process (Docker container) that continuously monitors a specified folder for incoming `.zip` files. Whenever a `.zip` file appears:  
 
-Create a **Dockerized background service** that continuously monitors a specified folder for incoming `.zip` files. Whenever a `.zip` file appears:  
-
-- Automatically extract its contents.  
-- Move the extracted contents into a **destination folder**, flattening any nested folders.  
-- **Delete the `.zip` file after successful extraction and transfer.**  
+- Automatically extract its contents into a **folder named after the `.zip` file**.  
+- Move the extracted folder into a target destination folder.  
+- **Delete the `.zip` file after successful extraction.**  
 - Handle deletion errors gracefully (e.g., if the file is locked).  
-- Run persistently in the background as a Docker container.  
-- Automatically process any `.zip` files left in the monitored folder at startup (resilient to downtime).  
-- Support concurrent processing of multiple `.zip` files.  
+- Keep running persistently using **periodic polling**, compatible with Windows Docker bind mounts.  
 
 ---
 
 ## 2. Scope  
 
 ### In Scope  
-
-- Monitor a **source folder** continuously.  
-- Detect new `.zip` files immediately upon arrival.  
-- Extract contents of the `.zip` file.  
-- Flatten folder structure: if the `.zip` contains a folder, its contents should be moved directly into the destination folder.  
-- Move extracted contents to a **destination folder**.  
+- Monitor a **source folder** continuously using **periodic polling**.  
+- Detect new `.zip` files immediately (polling interval configurable).  
+- Extract contents of the `.zip` file into a folder named after the `.zip`.  
+- Move the extracted folder to a **destination folder**.  
 - **Delete original `.zip` file once extraction and moving is successful.**  
-- Retry or log deletion errors if `.zip` cannot be deleted (e.g., locked by another process).  
-- Process runs continuously until manually stopped or container shut down.  
-- Support multiple `.zip` files being processed concurrently.  
-- Process leftover `.zip` files present at container startup.  
+- Retry or log deletion errors if `.zip` cannot be deleted.  
+- Process runs continuously until manually stopped.  
 
 ### Out of Scope  
-
 - Monitoring file types other than `.zip`.  
 - Handling password-protected `.zip` files.  
-- Handling severely corrupted `.zip` files (will log and skip).  
-- Complex folder structures beyond one level of nesting.  
+- Handling corrupted `.zip` files beyond logging and skipping.  
+- Flattening folder structures inside the zip (now preserved).  
 
 ---
 
 ## 3. Functional Requirements  
 
-1. **Folder Monitoring** – Dockerized process continuously watches the source folder.  
-2. **Startup Scan** – Any `.zip` files present at container start are processed automatically.  
-3. **File Validation** – Only `.zip` files trigger processing.  
-4. **Extraction Logic** – Flatten folder structure if needed, move files to destination.  
-5. **File Handling** – Delete `.zip` after success; retry if locked, log errors if deletion fails.  
-6. **Concurrency** – Multiple `.zip` files can be processed simultaneously (configurable via `MAX_WORKERS`).  
-7. **Continuous Operation** – Run as Docker container, restart on failure.  
-8. **Graceful Shutdown** – Container handles SIGTERM/SIGINT signals, finishing ongoing `.zip` processing before exiting.  
+1. **Folder Monitoring** – Process must continuously poll the source folder for new `.zip` files.  
+2. **File Validation** – Only `.zip` files trigger processing.  
+3. **Extraction Logic** – Each `.zip` is extracted into `DEST_DIR/<zip_name>/`. Folder structure inside `.zip` is preserved.  
+4. **File Handling** – Delete `.zip` after success; retry if locked, log errors if deletion fails.  
+5. **Continuous Operation** – Runs as a Docker container, compatible with Windows volumes.  
 
 ---
 
 ## 4. Non-Functional Requirements  
 
-- Detect `.zip` files within **2 seconds** of arrival.  
+- Detect `.zip` files **within polling interval** (default 10 seconds).  
 - Handle multiple `.zip` files concurrently.  
-- Process `.zip` files left in the folder after downtime.  
 - Continue operation even if one file is corrupted.  
-- Configurable via **environment variables**:  
-  - `SOURCE_DIR`  
-  - `DEST_DIR`  
-  - `RETRY_INTERVAL`  
-  - `MAX_RETRIES`  
-  - `OVERWRITE_POLICY`  
-  - `MAX_WORKERS`  
-- Runs inside Docker on **Windows 10+ or Linux hosts**.  
-- Logs rotation with max size 5MB, 3 backups.  
+- Configurable paths, retry intervals, overwrite policy, and scan interval.  
+- Runs on Windows 10 and above in Docker.  
+- Logs both to file and console.  
 
 ---
 
 ## 5. User Stories  
 
-- **As a user**, I want `.zip` files in my monitored folder to be automatically extracted.  
-- **As a user**, I want nested folders inside the `.zip` to be flattened.  
+- **As a user**, I want `.zip` files in my monitored folder to be automatically extracted into their own folder.  
+- **As a user**, I want nested folders inside the `.zip` to be preserved.  
 - **As a user**, I want the `.zip` file deleted after extraction.  
 - **As a user**, I want the system to gracefully handle locked files.  
 - **As a user**, I want multiple `.zip` files processed at the same time.  
-- **As a user**, I want leftover `.zip` files processed automatically after downtime.  
-- **As a user**, I want the process to run continuously in the background inside Docker.  
+- **As a user**, I want leftover `.zip` files processed automatically after downtime. 
+- **As a user**, I want the process to run continuously in the background.  
 
 ---
 
@@ -94,6 +76,7 @@ Create a **Dockerized background service** that continuously monitors a specifie
 - Process has read/write/delete permissions.  
 - Sufficient disk space is available.  
 - File locks are temporary.  
+- Docker Desktop has access to the host drives containing source/destination folders.  
 - Docker and docker-compose are installed on the host machine.  
 - Watchtower is optional for auto-updating the container.  
 
@@ -134,26 +117,14 @@ Optional metrics for high-volume environments:
 
 ```mermaid
 flowchart TD
-    A[Start / Docker Container] --> B[Scan SOURCE_DIR for leftover .zip files]
-    B --> C{Any leftover .zip files?}
-    C -- Yes --> D[Submit .zip files to ThreadPool for processing]
-    C -- No --> E[Start Watchdog Observer]
-    D --> E
-
-    E --> F[Detect New File in SOURCE_DIR]
-    F --> G{Is file .zip?}
-    G -- No --> H[Ignore file]
-    G -- Yes --> I[Submit .zip file to ThreadPool for processing]
-
-    subgraph ZipProcessing
-        I --> J[Extract .zip contents to temp folder]
-        J --> K[Flatten extracted files into DEST_DIR]
-        K --> L[Delete original .zip file with retries if locked]
-        L --> M{Deletion successful?}
-        M -- Yes --> N[Log success]
-        M -- No --> O[Log failure, skip file]
-    end
-
-    H --> E
-    N --> E
-    O --> E
+    A[Start / Periodically Scan Source Folder] --> B[Detect .zip Files]
+    B --> C{New zip file?}
+    C -- No --> D[Wait for next scan]
+    C -- Yes --> E[Extract .zip into DEST/<zip_name>/]
+    E --> F[Delete original .zip file]
+    F --> G{Deletion failed?}
+    G -- No --> H[Success]
+    G -- Yes --> I[Retry deletion after delay]
+    I --> F
+    I -- Retry limit reached --> J[Log error & Skip file]
+    J --> H
